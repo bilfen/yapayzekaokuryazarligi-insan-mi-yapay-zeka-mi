@@ -52,6 +52,10 @@ body:before,body:after{content:"";position:fixed;border:3px solid rgba(241,185,7
 #confetti i{position:absolute;left:var(--x);top:-20px;width:11px;height:18px;border-radius:3px;animation:confetti-fall var(--duration) var(--delay) ease-in forwards}
 @keyframes confetti-fall{to{transform:translate(var(--drift),110vh) rotate(var(--spin))}}
 @media(prefers-reduced-motion:reduce){#confetti i{top:15%;animation:none;transform:rotate(var(--spin))}}
+.feedback.good{font-size:clamp(20px,2.4vw,26px);animation:praise-pop .38s ease-out}
+@keyframes praise-pop{from{opacity:.2;transform:scale(.86)}60%{transform:scale(1.06)}to{opacity:1;transform:scale(1)}}
+@media(prefers-reduced-motion:reduce){.feedback.good{animation:none}}
+.card{-webkit-user-select:none;-webkit-touch-callout:none}
 </style>
 </head>
 <body>
@@ -252,8 +256,9 @@ async function begin(){
  document.querySelector("#confetti").replaceChildren();
  clearTimeout(moveTimer);stopAudio();deck=[...items];index=0;correct=0;
  intro.classList.add("hidden");finish.classList.add("hidden");game.classList.remove("hidden");
- showCard(false);locked=true;
- await playClip("intro");locked=false;playClip("q01");
+ showCard(false);
+ // Anlatım arka planda çalar; öğrenciyi sesin bitmesini bekletmeyiz.
+ playClip("intro").then(()=>{if(current&&!selected&&!game.classList.contains("hidden"))playClip("q"+String(current.id).padStart(2,"0"));});
 }
 function showCard(auto=true){
  locked=false;selected=false;feedback.textContent="";feedback.className="feedback";card.className="card";
@@ -263,17 +268,21 @@ function showCard(auto=true){
  document.querySelector("#promptText").textContent="Kim söyledi, tahmin et!";
  if(auto)playClip("q"+String(current.id).padStart(2,"0"));
 }
-async function choose(type){
- if(locked||!current)return;locked=true;selected=false;card.classList.remove("selected");
- card.setAttribute("aria-pressed","false");
+function choose(type){
+ if(locked||!current)return;
+ selected=false;card.classList.remove("selected");card.setAttribute("aria-pressed","false");
  if(type===current.type){
-  correct++;feedback.textContent="Doğru!";feedback.className="feedback good";card.classList.add("correct");
-  await playClip("correct");
-  moveTimer=setTimeout(()=>{index++;if(index===deck.length)done();else showCard();},700);
+  locked=true;correct++;
+  feedback.textContent="🎉 Tebrikler, doğru bildin!";feedback.className="feedback good";document.querySelector("#promptText").textContent="🎉 Tebrikler, doğru bildin!";
+  card.classList.add("correct");burst(28);
+  playClip("correct");
+  // Sesin bitmesini beklemeden bir sonraki bölüme geçeriz.
+  moveTimer=setTimeout(()=>{index++;if(index===deck.length)done();else showCard();},1000);
  }else{
-  feedback.textContent="Bir daha düşünelim.";feedback.className="feedback try";card.classList.add("wrong");
-  await playClip("retry");
-  card.classList.remove("wrong");locked=false;
+  feedback.textContent="Bir daha düşünelim.";feedback.className="feedback try";
+  card.classList.add("wrong");playClip("retry");
+  setTimeout(()=>card.classList.remove("wrong"),400);
+  locked=false;
  }
 }
 function done(){
@@ -292,6 +301,18 @@ function celebrate(){
   layer.appendChild(piece);
  }
  setTimeout(()=>layer.replaceChildren(),6000);
+}
+function burst(count){
+ const layer=document.querySelector("#confetti");
+ const reduced=window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+ const total=reduced?Math.min(8,count):count;
+ const mine=[];
+ for(let i=0;i<total;i++){
+  const piece=document.createElement("i");
+  piece.style.cssText="--x:"+(Math.random()*100)+"vw;--drift:"+((Math.random()-.5)*40)+"vw;--spin:"+(Math.random()*1440)+"deg;--delay:"+(Math.random()*.25)+"s;--duration:"+(2+Math.random()*1.2)+"s;background:"+["#f7c948","#f45d96","#29b6f6","#7855d9","#28c991"][i%5];
+  layer.appendChild(piece);mine.push(piece);
+ }
+ setTimeout(()=>mine.forEach(p=>p.remove()),3200);
 }
 document.querySelector("#startBtn").addEventListener("click",begin);
 document.querySelector("#againBtn").addEventListener("click",begin);
@@ -313,13 +334,21 @@ function clearDrag(){
  zones.forEach(z=>z.classList.remove("over"));
 }
 card.addEventListener("pointerdown",e=>{
- if(locked||!e.isPrimary||e.button!==0)return;
+ if(locked||!current||!e.isPrimary)return;
+ if(e.pointerType==="mouse"&&e.button!==0)return;
  drag={id:e.pointerId,x:e.clientX,y:e.clientY,moved:false};
- card.setPointerCapture(e.pointerId);
+ // Parmak/fare karttan çıksa da olayları yakala: bırakınca hedef kutuyu buluruz.
+ window.addEventListener("pointermove",onDragMove,{passive:false});
+ window.addEventListener("pointerup",onDragEnd);
+ window.addEventListener("pointercancel",onDragEnd);
 });
-card.addEventListener("pointermove",e=>{
+function zoneAt(x,y){
+ const el=document.elementFromPoint(x,y);
+ return el&&el.closest?el.closest(".zone"):null;
+}
+function onDragMove(e){
  if(!drag||drag.id!==e.pointerId)return;
- if(!drag.moved&&Math.hypot(e.clientX-drag.x,e.clientY-drag.y)>10){
+ if(!drag.moved&&Math.hypot(e.clientX-drag.x,e.clientY-drag.y)>8){
   drag.moved=true;
   ghost=card.cloneNode(true);ghost.removeAttribute("id");
   ghost.querySelectorAll("[id]").forEach(el=>el.removeAttribute("id"));
@@ -329,21 +358,21 @@ card.addEventListener("pointermove",e=>{
   document.body.appendChild(ghost);card.classList.add("is-dragging");
  }
  if(!drag.moved)return;
- e.preventDefault();
+ if(e.cancelable)e.preventDefault();
  ghost.style.left=e.clientX+"px";ghost.style.top=e.clientY+"px";
- const target=document.elementFromPoint(e.clientX,e.clientY)?.closest(".zone");
+ const target=zoneAt(e.clientX,e.clientY);
  zones.forEach(z=>z.classList.toggle("over",z===target));
-});
-card.addEventListener("pointerup",e=>{
+}
+function onDragEnd(e){
  if(!drag||drag.id!==e.pointerId)return;
+ window.removeEventListener("pointermove",onDragMove);
+ window.removeEventListener("pointerup",onDragEnd);
+ window.removeEventListener("pointercancel",onDragEnd);
  const moved=drag.moved;
- const target=moved?document.elementFromPoint(e.clientX,e.clientY)?.closest(".zone"):null;
+ const target=moved?zoneAt(e.clientX,e.clientY):null;
  clearDrag();
- if(card.hasPointerCapture(e.pointerId))card.releasePointerCapture(e.pointerId);
- if(moved){ignoreClickUntil=Date.now()+500;if(target)choose(target.dataset.zone);}
-});
-card.addEventListener("pointercancel",clearDrag);
-card.addEventListener("lostpointercapture",clearDrag);
+ if(moved){ignoreClickUntil=Date.now()+450;if(target)choose(target.dataset.zone);}
+}
 </script>
 </body>
 </html>
